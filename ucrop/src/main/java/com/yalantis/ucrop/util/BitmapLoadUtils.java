@@ -22,6 +22,13 @@ import java.io.InputStream;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.exifinterface.media.ExifInterface;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by Oleksii Shliama (https://github.com/shliama).
@@ -29,6 +36,28 @@ import androidx.exifinterface.media.ExifInterface;
 public class BitmapLoadUtils {
 
     private static final String TAG = "BitmapLoadUtils";
+    private static final int CPU_COUNT = Runtime.getRuntime().availableProcessors();
+    public static final Executor UCROP_THREAD_POOL_EXECUTOR;
+    private static final int CORE_POOL_SIZE = Math.max(2, Math.min(CPU_COUNT - 1, 4));
+    private static final int MAXIMUM_POOL_SIZE = CPU_COUNT * 2 + 1;
+    private static final int KEEP_ALIVE_SECONDS = 30;
+    private static final BlockingQueue<Runnable> sPoolWorkQueue =
+        new LinkedBlockingQueue<Runnable>(128);
+    private static final ThreadFactory sThreadFactory = new ThreadFactory() {
+        private final AtomicInteger mCount = new AtomicInteger(1);
+
+        public Thread newThread(Runnable r) {
+            return new Thread(r, "uCropAsyncTask #" + mCount.getAndIncrement());
+        }
+    };
+
+    static {
+        ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(
+            CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, KEEP_ALIVE_SECONDS, TimeUnit.SECONDS,
+            sPoolWorkQueue, sThreadFactory);
+        threadPoolExecutor.allowCoreThreadTimeOut(true);
+        UCROP_THREAD_POOL_EXECUTOR = threadPoolExecutor;
+    }
 
     public static void decodeBitmapInBackground(@NonNull Context context,
                                                 @NonNull Uri uri, @Nullable Uri outputUri,
@@ -36,7 +65,7 @@ public class BitmapLoadUtils {
                                                 BitmapLoadCallback loadCallback) {
 
         new BitmapLoadTask(context, uri, outputUri, requiredWidth, requiredHeight, loadCallback)
-                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+            .executeOnExecutor(UCROP_THREAD_POOL_EXECUTOR);
     }
 
     public static Bitmap transformBitmap(@NonNull Bitmap bitmap, @NonNull Matrix transformMatrix) {
